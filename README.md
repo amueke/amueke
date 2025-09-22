@@ -1,7 +1,5 @@
 - 👋 Hi, I’m @amueke
-- 👀 I’m interested in statistical simulations in health, application of theoretical statistics in health.
-- 🌱 I’m currently learning R
-- 💞️ I’m looking to collaborate on data analyses  
+- 💞️ I’m looking to collaborate on data 
 - 📫 How to reach me through amueke@gmail.com / amueke@outlook.com
 
 <!---
