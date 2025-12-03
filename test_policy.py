@@ -4,7 +4,6 @@ import pytest
 from model import (
     SYSTEM_STATE,
     Resource,
-    Link,
     U_OWNER,
     PERM_EDIT,
     PERM_VIEW,
@@ -12,16 +11,18 @@ from model import (
     TotalPerms,
     CreateLink,
     DeleteResource,
-    MoveResource
+    MoveResource,
+    GiveLinkToUser # <--- NEW: Import the helper function
 )
 
 # --- Fixture to Reset State Before Each Test ---
-# Ensures tests are independent by clearing the global state
 @pytest.fixture(autouse=True)
 def reset_state():
+    # Clear mutable state
     SYSTEM_STATE["R"].clear()
     SYSTEM_STATE["L"].clear()
-    # Ensure the non-owner users are present for all identity-bound tests
+    SYSTEM_STATE["holding"].clear() # <--- NEW: Clear the holding relation
+    # Reset Users, ensuring "user_A" and "user_B" are always present for identity checks
     SYSTEM_STATE["U"] = {U_OWNER, "user_A", "user_B"}
 
 
@@ -30,13 +31,12 @@ def reset_state():
 def test_invariant_3_vault_non_shareability():
     """
     Validation of Invariant 3: Files in the Personal Vault cannot be shared via links.
-    This check ensures the CreateLink precondition rejects R_vault targets.
     """
     # Setup: Define a Vault resource
     vault_item = Resource(id="vault_doc", is_vault=True)
     SYSTEM_STATE["R"]["vault_doc"] = vault_item
     
-    # Action/Assertion: Attempt to create a link (share) for the Vault item
+    # Action/Assertion: Attempt to create a link (share) for the Vault item (Must fail)
     with pytest.raises(PolicyViolation) as excinfo:
         CreateLink(
             u=U_OWNER, 
@@ -46,28 +46,23 @@ def test_invariant_3_vault_non_shareability():
             state=SYSTEM_STATE
         )
         
-    # Check for correct error message
     assert "Vault resources cannot be shared" in str(excinfo.value)
-    
-    # Assert Invariant 3: No new link should exist
     assert len(SYSTEM_STATE["L"]) == 0 
 
 
 def test_invariant_7_link_state_consistency_on_delete():
     """
     Validation of Invariant 7 (part ii): No link should point to a deleted resource.
-    This check ensures the garbage collection effect of DeleteResource is correctly implemented.
     """
     file_id = "report.docx"
     
-    # Setup: Create file and two links pointing to it
+    # Setup: Create file and two links pointing to it. 
+    # NOTE: CreateLink automatically gives possession to U_OWNER, satisfying the possession check.
     SYSTEM_STATE["R"][file_id] = Resource(id=file_id)
-    # Note: CreateLink requires owner or edit perms, which U_OWNER has implicitly
     link_a = CreateLink(U_OWNER, file_id, "ANYONE", {PERM_VIEW}, SYSTEM_STATE)
     link_b = CreateLink(U_OWNER, file_id, "ANYONE", {PERM_EDIT}, SYSTEM_STATE)
     
-    initial_link_count = len(SYSTEM_STATE["L"]) 
-    assert initial_link_count == 2
+    assert len(SYSTEM_STATE["L"]) == 2
 
     # Action: Delete the resource
     DeleteResource(U_OWNER, resource_id=file_id, state=SYSTEM_STATE)
@@ -75,8 +70,6 @@ def test_invariant_7_link_state_consistency_on_delete():
     # Assertion: Verify the resource is gone and ALL dangling links were garbage collected
     assert file_id not in SYSTEM_STATE["R"]
     assert len(SYSTEM_STATE["L"]) == 0
-    assert link_a.key not in SYSTEM_STATE["L"]
-    assert link_b.key not in SYSTEM_STATE["L"]
 
 
 # --- STATE TRANSITION CHECKS (Section 9 Validation) ---
@@ -84,7 +77,6 @@ def test_invariant_7_link_state_consistency_on_delete():
 def test_transition_deleteresource_precondition_check():
     """
     Validation of DeleteResource Precondition: u=u_owner ∨ (edit ∈ TotalPerms).
-    A user with only VIEW permission must be denied deletion, but a user with EDIT must be allowed.
     """
     file_id = "temp_data.csv"
     user_viewer = "user_A"
@@ -95,23 +87,30 @@ def test_transition_deleteresource_precondition_check():
     view_link = CreateLink(U_OWNER, file_id, "SPECIFIC", {PERM_VIEW}, SYSTEM_STATE)
     view_link.recipients.add(user_viewer)
     
+    # FIX: User_A must possess the link token to use it (holding relation)
+    GiveLinkToUser(user_viewer, view_link.key, SYSTEM_STATE) 
+    
     # Pre-Check 1: Confirm TotalPerms is correct (must ONLY have view)
-    assert TotalPerms(user_viewer, file_id, SYSTEM_STATE) == {PERM_VIEW}, "User must ONLY have VIEW permission at this stage."
+    perms_check_1 = TotalPerms(user_viewer, file_id, SYSTEM_STATE)
+    assert perms_check_1 == {PERM_VIEW}, f"Expected {{'{PERM_VIEW}'}}, got {perms_check_1}"
     
     # Action/Assertion 1: Attempt deletion with User_A (Must fail)
     with pytest.raises(PolicyViolation) as excinfo:
         DeleteResource(u=user_viewer, resource_id=file_id, state=SYSTEM_STATE)
         
-    assert "edit permission" in str(excinfo.value), "Deletion failure must be due to missing edit permission."
-    # Post-Condition Check: The file must still exist if the precondition was denied
+    assert "edit permission" in str(excinfo.value)
     assert file_id in SYSTEM_STATE["R"] 
     
-    # Setup 2: Grant User_A EDIT permission (Note: Permissions are additive)
+    # Setup 2: Grant User_A EDIT permission (Permissions are additive)
     edit_link = CreateLink(U_OWNER, file_id, "SPECIFIC", {PERM_EDIT}, SYSTEM_STATE)
     edit_link.recipients.add(user_viewer)
     
+    # FIX: User_A must possess the new edit link token
+    GiveLinkToUser(user_viewer, edit_link.key, SYSTEM_STATE) 
+    
     # Pre-Check 2: Confirm TotalPerms now has both
-    assert TotalPerms(user_viewer, file_id, SYSTEM_STATE) == {PERM_VIEW, PERM_EDIT}
+    perms_check_2 = TotalPerms(user_viewer, file_id, SYSTEM_STATE)
+    assert perms_check_2 == {PERM_VIEW, PERM_EDIT}
     
     # Action/Assertion 2: Attempt deletion with User_A (Must succeed)
     DeleteResource(u=user_viewer, resource_id=file_id, state=SYSTEM_STATE)
@@ -131,11 +130,15 @@ def test_transition_moveresource_effect_inheritance_change():
     SYSTEM_STATE["R"]["Folder_A"] = Resource(id="Folder_A")
     link_A = CreateLink(U_OWNER, "Folder_A", "SPECIFIC", {PERM_EDIT}, SYSTEM_STATE)
     link_A.recipients.add(user_guest)
+    # FIX: User_B must possess the link token
+    GiveLinkToUser(user_guest, link_A.key, SYSTEM_STATE)
     
     # Setup 2: Folder B (New Parent) - Shared to 'user_guest' with VIEW permission
     SYSTEM_STATE["R"]["Folder_B"] = Resource(id="Folder_B")
     link_B = CreateLink(U_OWNER, "Folder_B", "SPECIFIC", {PERM_VIEW}, SYSTEM_STATE)
     link_B.recipients.add(user_guest)
+    # FIX: User_B must possess the link token
+    GiveLinkToUser(user_guest, link_B.key, SYSTEM_STATE)
     
     # Setup 3: File Z is initially inside Folder A
     SYSTEM_STATE["R"][file_z_id] = Resource(id=file_z_id, parent_id="Folder_A")
