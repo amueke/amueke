@@ -1,171 +1,181 @@
 import uuid
 from typing import Dict, Set, Any
 
-# --- Entity Definitions and Constants ---
+# ---------------------- CONSTANTS ----------------------
 
 U_OWNER = "u_owner"
 PERM_VIEW = "view"
 PERM_EDIT = "edit"
 
+ACTIONS_THAT_MAP_TO_EDIT = {"edit", "delete", "share"}
+ACTIONS_THAT_MAP_TO_VIEW = {"view", "download"}
+
+# ---------------------- ENTITIES ------------------------
+
 class Resource:
-    """Represents R_files and R_folders."""
+    """Represents files/folders."""
     def __init__(self, id: str, is_vault: bool = False, parent_id: str = None):
         self.id = id
         self.is_vault = is_vault
-        self.parent_id = parent_id 
+        self.parent_id = parent_id
+
 
 class Link:
-    """Represents a sharing token l in L (Section 4.4)."""
-    # SYNTAX FIX: This signature is now clean and correct.
+    """
+    Represents a sharing link.
+    scope ∈ {ANYONE, SPECIFIC}
+    """
     def __init__(self, key: str, target_id: str, perms: Set[str], scope: str = "ANYONE"):
         self.key = key
         self.target_id = target_id
-        self.perms = perms 
+        self.perms = perms
         self.scope = scope
         self.recipients: Set[str] = set()
 
-# --- Global System State (Γ) ---
+
+# ---------------------- GLOBAL STATE --------------------
 
 SYSTEM_STATE = {
-    "R": {},    # {id: Resource} dictionary
-    "L": {},    # {key: Link} dictionary
-    "U": {U_OWNER}, # Set of users
+    "R": {},          # resources
+    "L": {},          # links
+    "U": {U_OWNER},   # users
 }
 
-# --- Utility Functions (Relations and Predicates) ---
+# ---------------------- PERMISSION LOGIC ----------------
 
 def req(action: str) -> str:
-    """Implements req: A -> P (Section 4.3.1)"""
-    # edit subsumes view (edit grants view and download)
-    if action in ["edit", "delete", "share"]:
+    """
+    Maps ACTIONS → REQUIRED PERMISSION.
+    Example: req("download") → view
+             req("edit") → edit
+    """
+    if action in ACTIONS_THAT_MAP_TO_EDIT:
         return PERM_EDIT
-    if action in ["view", "download"]:
+    if action in ACTIONS_THAT_MAP_TO_VIEW:
         return PERM_VIEW
     raise ValueError(f"Unknown action: {action}")
 
-def is_ancestor(ancestor_id: str, resource_id: str, state: Dict) -> bool:
-    """Implements is_ancestor(p,c) (Section 5.2)"""
-    resource = state["R"].get(resource_id)
-    if not resource: return False
-    
-    current_parent_id = resource.parent_id
-    while current_parent_id:
-        if current_parent_id == ancestor_id:
+
+def is_ancestor(p: str, c: str, state: Dict) -> bool:
+    """True if p is an ancestor of c in the folder hierarchy."""
+    node = state["R"].get(c)
+    if not node:
+        return False
+
+    parent = node.parent_id
+    while parent:
+        if parent == p:
             return True
-        parent_resource = state["R"].get(current_parent_id)
-        if not parent_resource:
-            break
-        current_parent_id = parent_resource.parent_id
+        parent = state["R"].get(parent).parent_id if parent in state["R"] else None
+
     return False
 
-def ValidLink(link: Link, user: str, state: Dict, action: str = PERM_VIEW) -> bool:
+
+def ValidLink(link: Link, user: str, state: Dict, action: str = "view") -> bool:
     """
-    Simplified implementation of ValidLink(l, u, a, Γ) (Section 7.2).
-    Checks Identity and Permissions.
+    Checks whether the link is usable by user for a given ACTION.
+    ACTION is correctly interpreted through req().
     """
-    
-    # 2. Identity: ((l.scope = ANYONE) V (u ∈ recipients(l)))
+
+    # ----- 1. Identity / Possession Semantics -----
     if link.scope == "SPECIFIC" and user not in link.recipients:
         return False
 
-    # 5. Permissions: (req(a) ∈ l.perms_effective)
+    # ----- 2. Permission Semantics -----
     required_perm = req(action)
-    
-    # Check if the required permission is granted by the link's explicit permissions (Pl)
+
+    # Direct permission
     if required_perm in link.perms:
         return True
-    
-    # Check if a higher permission grants the required one (edit subsumes view)
+
+    # Subsumption: edit → view
     if required_perm == PERM_VIEW and PERM_EDIT in link.perms:
         return True
-        
+
     return False
+
 
 def TotalPerms(user: str, resource_id: str, state: Dict, context: Dict = {}) -> Set[str]:
     """
-    Implements TotalPerms(u, r, Γ) (Section 7.4). 
-    Fixes: Ensures ValidLink (Identity/Possession) check is performed.
+    Computes all effective permissions over a resource.
+    Includes identity checks, inheritance, and permission subsumption.
     """
-    
-    effective_perms = set()
 
-    # Owner has implicit, irrevocable full control
+    # Owner always gets full rights
     if user == U_OWNER:
         return {PERM_VIEW, PERM_EDIT}
 
-    # Iterate through all active links (L)
-    for link_key, link in state["L"].items():
-        
-        # Check if the link is even usable by the user (Identity/Possession)
-        if not ValidLink(link, user, state, action=PERM_VIEW):
+    outcome = set()
+
+    for link in state["L"].values():
+
+        # Must pass identity + permission check for basic viewing
+        if not ValidLink(link, user, state, action="view"):
             continue
 
-        # Direct Perms: l.target = r
+        # Direct permission
         if link.target_id == resource_id:
-            effective_perms.update(link.perms)
-            
-        # Inherited Perms: is_ancestor(l.target, r)
-        if is_ancestor(link.target_id, resource_id, state):
-            effective_perms.update(link.perms)
-            
-    # TotalPerms is the union of all permissions
-    return effective_perms
+            outcome.update(link.perms)
 
-# --- Operational Semantics (Section 9) ---
+        # Inherited permission
+        if is_ancestor(link.target_id, resource_id, state):
+            outcome.update(link.perms)
+
+    return outcome
+
+
+# ---------------------- OPERATIONS -----------------------
 
 class PolicyViolation(Exception):
-    """Custom exception for policy precondition failures."""
     pass
 
+
 def generate_key():
-    """Generates a unique link key (Invariant 8: Key Uniqueness)"""
     return str(uuid.uuid4())
 
+
 def CreateLink(u: str, target_id: str, scope: str, perms: Set[str], state: Dict, context: Dict = {}):
-    """Implements CreateLink (Section 9.1)"""
-    
-    target_resource = state["R"].get(target_id)
-    if not target_resource:
+    """
+    Create a new sharing link.
+    """
+    target = state["R"].get(target_id)
+    if not target:
         raise PolicyViolation("Target resource does not exist.")
 
-    # Precondition: (u=u_owner V edit in TotalPerms) AND target not in R_vault
-    has_edit_perm = PERM_EDIT in TotalPerms(u, target_id, state, context)
-    
-    if target_resource.is_vault:
-        # Invariant 3: Vault Non-Shareability
-        raise PolicyViolation("Vault resources cannot be shared via links (Invariant 3).")
-        
-    if u != U_OWNER and not has_edit_perm:
-        raise PolicyViolation("Only the owner or users with edit permission can create links.")
+    # Vault resources cannot be shared
+    if target.is_vault:
+        raise PolicyViolation("Vault resources cannot be shared.")
 
-    # Effect: Create new link
-    new_key = generate_key()
-    new_link = Link(key=new_key, target_id=target_id, perms=perms, scope=scope)
-    state["L"][new_key] = new_link
-    return new_link
+    # Only owner or edit-holders can create
+    if u != U_OWNER and PERM_EDIT not in TotalPerms(u, target_id, state):
+        raise PolicyViolation("Insufficient permissions to create link.")
+
+    key = generate_key()
+    link = Link(key, target_id, perms, scope)
+    state["L"][key] = link
+    return link
+
 
 def DeleteResource(u: str, resource_id: str, state: Dict, context: Dict = {}):
-    """Implements DeleteResource (Section 9.7)"""
+    """
+    Delete a resource. Removes all links referencing it.
+    """
+    if u != U_OWNER and PERM_EDIT not in TotalPerms(u, resource_id, state):
+        raise PolicyViolation("Insufficient permissions to delete the resource.")
 
-    # Precondition: u=u_owner(resource) ∨ (edit ∈ TotalPerms)
-    if u != U_OWNER and PERM_EDIT not in TotalPerms(u, resource_id, state, context):
-        raise PolicyViolation("Deletion requires owner status or explicit edit permission.")
-
-    # Effect 1: R' = R \ {resource}
+    # Remove resource
     if resource_id in state["R"]:
         del state["R"][resource_id]
 
-    # Effect 2: Garbage collection of dangling links (Invariant 7 - part ii)
-    links_to_keep = {}
-    for key, link in state["L"].items():
-        if link.target_id != resource_id:
-            links_to_keep[key] = link
-    state["L"] = links_to_keep
+    # Remove links pointing to deleted resource
+    state["L"] = {k: l for k, l in state["L"].items()
+                  if l.target_id != resource_id}
+
 
 def MoveResource(u: str, resource_id: str, new_parent_id: str, state: Dict, context: Dict = {}):
-    """Implements MoveResource (Section 9.6)"""
-    
-    # Precondition: Owner required (implied in formal model for state transitions)
+    """
+    Move resource to another folder. Owner-only operation.
+    """
     if u != U_OWNER:
         raise PolicyViolation("Only the owner can move resources.")
 
@@ -174,12 +184,9 @@ def MoveResource(u: str, resource_id: str, new_parent_id: str, state: Dict, cont
 
     if not resource or not new_parent:
         raise PolicyViolation("Resource or new parent not found.")
-    
-    # Check for Acyclic Hierarchy (Invariant 2)
+
+    # Prevent cycles
     if is_ancestor(resource_id, new_parent_id, state):
-         raise PolicyViolation("Cannot move a resource into its own descendant (Acyclic Hierarchy Violation).")
+        raise PolicyViolation("Cannot move resource into its descendant.")
 
-
-    # Effect: parent'(resource) = new_parent
     resource.parent_id = new_parent_id
-    # Result: Permissions change implicitly via TotalPerms
