@@ -1,0 +1,51 @@
+name: Access Control Policy Validation
+
+# 1. Define when the workflow should run
+on:
+  # Trigger on every push to the main branch
+  push:
+    branches:
+      - main
+  # Trigger on pull requests targeting the main branch
+  pull_request:
+    branches:
+      - main
+
+# 2. Define the jobs (the tasks to be performed)
+jobs:
+  validate_policy:
+    # Use a standard GitHub-hosted runner
+    runs-on: ubuntu-latest
+    
+    # 3. Define the sequence of steps in the job
+    steps:
+      - name: ⬇️ Checkout code
+        # The actions/checkout@v4 action downloads your repository's code
+        uses: actions/checkout@v4
+        
+      - name: 🐍 Set up Python 3.11
+        # The actions/setup-python@v5 action sets up the Python environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: 📦 Install dependencies
+        # This assumes your project has a requirements.txt file (e.g., listing 'pytest')
+        run: pip install -r requirements.txt
+        
+      - name: ⚙️ Run Formal Policy Tests
+        # Executes your policy test file. Replace 'test_policy.py' 
+        # with your actual test file name if it's different.
+        run: python -m pytest test_policy.py
+        
+      # Optional steps to provide clear status messages in the logs
+      - name: ✅ Policy Validation Successful
+        if: success()
+        run: echo "The access control model implementation passed all formal specification checks."
+        
+      - name: ❌ Policy Validation Failed
+        if: failure()
+        run: |
+          echo "🚨 ERROR: The policy implementation violates the formal specification."
+          exit 1
+          "Add GitHub Actions workflow for access control policy validation for Project31-Tajkia, Gaurav & Austin").
