@@ -1,4 +1,3 @@
-
 # model.py
 """
 Full OneDrive (Personal) policy model implementation.
@@ -191,7 +190,8 @@ def ValidLink(link: Link, user: str, action: str = "view", state: Dict = SYSTEM_
     ValidLink(l, u, a, Γ) per Section 7.2:
 
     Checks:
-      1. Possession: (u, l) in holding
+      1. Possession: For ANYONE links, (u, l) in holding is required.
+         For SPECIFIC links, possession is NOT required; identity is sufficient.
       2. Identity: (l.scope == ANYONE) OR (u in l.recipients)
       3. Expiration: if 'expiry' in l.constraints then tnow < expiry
       4. Password: if 'password' in l.constraints then provided_pw == l.constraints['password']
@@ -199,10 +199,11 @@ def ValidLink(link: Link, user: str, action: str = "view", state: Dict = SYSTEM_
     """
     ctx = _normalize_context(context)
 
-    # 1. Possession: user must possess the link token
-    holders = state.get("holding", {}).get(link.key, set())
-    if user not in holders:
-        return False
+    # 1. Possession: Only required for ANYONE links (users must hold the token)
+    if link.scope == SCOPE_ANYONE:
+        holders = state.get("holding", {}).get(link.key, set())
+        if user not in holders:
+            return False
 
     # 2. Identity: SPECIFIC must have user in recipients; ANYONE allowed
     if link.scope == SCOPE_SPECIFIC and user not in link.recipients:
