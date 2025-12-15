@@ -1,8 +1,11 @@
-- 👋 Hi, I’m @amueke
-- 💞️ I’m looking to collaborate on data 
-- 📫 How to reach me through amueke@gmail.com / amueke@outlook.com
+Formal Modeling and Authorization Oracle for OneDrive (Personal Edition)
+Project Overview
+This repository contains the formal model and Python implementation of an authorization oracle for Microsoft OneDrive's access control system (Personal Edition). The model uses a Capability-Based approach (Link-Mediated Access Model - LMAM) to capture sharing links, hierarchical inheritance, Personal Vault security, and state transitions. The oracle simulates access decisions (GRANT/DENY), and a comprehensive test suite validates the implementation.
 
-<!---
-amueke/amueke is a ✨ special ✨ repository because its `README.md` (this file) appears on your GitHub profile.
-You can click the Preview link to take a look at your changes.
---->
+Project Structure
+amueke/             
+├── README.md
+├── model.py
+├── requirements.txt
+├── text_policy.py
+
