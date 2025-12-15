@@ -2,7 +2,7 @@
 1. More narrative report format:- easier to read to for not so technical in terms of presentation of the same principles and content.
 2. YAML - From the final Project 31 model I have implemented a YAML pipeline to test the model on GitHub Actions directly and it ran successfully; Different from our Project31 Team Implementation which runs on Colab.
 3. Fully defined pytest environment as included in the requirements.txt
-4. Different file structure, code file content and tests flow; all encompasing.
+4. Different file structure, code file content and tests flow; all encompassing.
    
 ## Project Overview
 
